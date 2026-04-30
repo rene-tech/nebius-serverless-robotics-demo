@@ -38,6 +38,7 @@ export type StatusPayload = {
   mode: DemoMode;
   endpointConfigured: boolean;
   endpointPath: string;
+  healthPath: string;
   requestCount: number;
   errorCount: number;
   lastLatencyMs: number | null;
@@ -46,6 +47,7 @@ export type StatusPayload = {
   modelImage: string;
   gpuClass: string;
   shmSize: string;
+  replayRecordingEnabled: boolean;
   startedAt: string;
 };
 
@@ -54,5 +56,17 @@ export type InferenceResponse = {
   prompt: string;
   plan: RoboticsPlan;
   warning?: string;
+  status: StatusPayload;
+};
+
+export type LiveCheckResponse = {
+  ok: boolean;
+  configured: boolean;
+  missing?: string[];
+  httpStatus?: number;
+  latencyMs?: number;
+  healthPath?: string;
+  bodyPreview?: string;
+  error?: string;
   status: StatusPayload;
 };

@@ -15,7 +15,8 @@ import {
   ShieldCheck
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { DemoMode, InferenceResponse, RoboticsPlan, SceneSummary, StatusPayload } from "./types";
+import { apiFetch } from "./api";
+import type { DemoMode, InferenceResponse, LiveCheckResponse, RoboticsPlan, SceneSummary, StatusPayload } from "./types";
 
 const modes: DemoMode[] = ["offline", "replay", "live"];
 
@@ -193,7 +194,9 @@ export default function App() {
   const [prompt, setPrompt] = useState("");
   const [status, setStatus] = useState<StatusPayload | null>(null);
   const [result, setResult] = useState<InferenceResponse | null>(null);
+  const [liveCheck, setLiveCheck] = useState<LiveCheckResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [checkingLive, setCheckingLive] = useState(false);
   const [error, setError] = useState("");
 
   const selectedScene = useMemo(
@@ -206,7 +209,7 @@ export default function App() {
 
     async function load() {
       try {
-        const [scenesResponse, statusResponse] = await Promise.all([fetch("/api/scenes"), fetch("/api/status")]);
+        const [scenesResponse, statusResponse] = await Promise.all([apiFetch("/api/scenes"), apiFetch("/api/status")]);
         const scenesPayload = (await scenesResponse.json()) as { scenes: SceneSummary[] };
         const statusPayload = (await statusResponse.json()) as StatusPayload;
         if (ignore) return;
@@ -236,7 +239,7 @@ export default function App() {
     setLoading(true);
     setError("");
     try {
-      const response = await fetch("/api/mode", {
+      const response = await apiFetch("/api/mode", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode })
@@ -256,7 +259,7 @@ export default function App() {
     setError("");
 
     try {
-      const response = await fetch("/api/infer", {
+      const response = await apiFetch("/api/infer", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sceneId: selectedScene.id, prompt })
@@ -269,6 +272,26 @@ export default function App() {
       setError(inferError instanceof Error ? inferError.message : String(inferError));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function checkLiveEndpoint() {
+    setCheckingLive(true);
+    setError("");
+    try {
+      const response = await apiFetch("/api/live-check", { method: "POST" });
+      const payload = (await response.json()) as LiveCheckResponse;
+      setLiveCheck(payload);
+      setStatus(payload.status);
+      if (!response.ok && payload.missing?.length) {
+        setError(`Live endpoint is not configured: ${payload.missing.join(", ")}.`);
+      } else if (!response.ok) {
+        setError(payload.error ?? `Live health check failed with HTTP ${payload.httpStatus ?? "error"}.`);
+      }
+    } catch (checkError) {
+      setError(checkError instanceof Error ? checkError.message : String(checkError));
+    } finally {
+      setCheckingLive(false);
     }
   }
 
@@ -288,6 +311,10 @@ export default function App() {
             <LockKeyhole size={15} aria-hidden="true" />
             Token held by backend proxy
           </div>
+          <button className="secondary-button" type="button" disabled={checkingLive} onClick={checkLiveEndpoint}>
+            {checkingLive ? <RefreshCw size={15} className="spin" aria-hidden="true" /> : <Activity size={15} aria-hidden="true" />}
+            Check live
+          </button>
           <ModeControl mode={currentMode} disabled={loading} onChange={updateMode} />
         </div>
       </header>
@@ -299,6 +326,16 @@ export default function App() {
         <Metric icon={Cpu} label="Resource" value={status?.gpuClass ?? "GPU-backed endpoint"} />
         <Metric icon={Server} label="Container" value={status?.modelImage ?? "Docker image configured on backend"} />
       </section>
+
+      {liveCheck && (
+        <section className={liveCheck.ok ? "live-check live-check-ok" : "live-check live-check-warn"}>
+          {liveCheck.ok ? <CheckCircle2 size={16} aria-hidden="true" /> : <AlertTriangle size={16} aria-hidden="true" />}
+          <span>
+            Live health: {liveCheck.configured ? liveCheck.httpStatus ?? "checked" : "not configured"}
+            {typeof liveCheck.latencyMs === "number" ? `, ${liveCheck.latencyMs} ms` : ""}
+          </span>
+        </section>
+      )}
 
       <section className="workspace-grid">
         <aside className="scene-rail" aria-label="Scene picker">

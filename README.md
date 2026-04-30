@@ -35,6 +35,12 @@ The app runs as:
 
 The default mode is `offline`, so the demo works without network access or endpoint credentials.
 
+Run the full local verification suite:
+
+```bash
+npm test
+```
+
 ## Live Endpoint Configuration
 
 Copy `.env.example` to `.env` and set the backend-only values:
@@ -44,14 +50,22 @@ SERVER_PORT=8787
 DEMO_MODE=offline
 NEBIUS_ENDPOINT_URL=https://your-endpoint.example
 NEBIUS_ENDPOINT_PATH=/v1/robotics/plan
+NEBIUS_HEALTH_PATH=/health
 NEBIUS_ENDPOINT_TOKEN=...
 NEBIUS_MODEL_IMAGE=registry.example.com/robotics/cosmos-reason:demo
 NEBIUS_GPU_CLASS=GPU-backed Serverless AI endpoint
 NEBIUS_SHM_SIZE=16Gi
 ALLOW_FALLBACK_ON_ERROR=true
+RECORD_LIVE_RESPONSES=true
 ```
 
 Use the presenter control in the UI to switch between `offline`, `replay`, and `live`.
+
+Validate a configured live endpoint before rehearsal:
+
+```bash
+npm run validate:live
+```
 
 ## Backend API
 
@@ -59,6 +73,7 @@ Use the presenter control in the UI to switch between `offline`, `replay`, and `
 - `GET /api/status`
 - `GET /api/scenes`
 - `POST /api/mode` with `{ "mode": "offline" | "replay" | "live" }`
+- `POST /api/live-check`
 - `POST /api/infer` with `{ "sceneId": "...", "prompt": "..." }`
 
 The live endpoint receives:
@@ -112,6 +127,10 @@ docker run --rm -p 8787:8787 --env-file .env nebius-serverless-robotics-demo
 4. Point out detected objects, the selected target, trajectory, safety notes, and latency.
 5. Switch to a safety-focused scene and show the stop or avoid behavior.
 6. Switch to `live` when the endpoint is configured and healthy.
+
+## Live Demo Readiness
+
+See [docs/live-demo-runbook.md](docs/live-demo-runbook.md) for the Nebius endpoint contract, CLI command shape, rehearsal flow, replay capture, and hosted-page guidance.
 
 ## Notes
 

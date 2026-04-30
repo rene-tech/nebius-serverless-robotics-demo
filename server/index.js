@@ -1,5 +1,8 @@
 import cors from "cors";
+import dotenv from "dotenv";
 import express from "express";
+import { existsSync } from "node:fs";
+import { appendFile, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getScene, sceneSummary, scenes } from "./demo-data.js";
@@ -8,17 +11,23 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, "..");
 const distDir = path.join(rootDir, "dist");
+dotenv.config({ path: path.join(rootDir, ".env") });
 
 const app = express();
 const port = Number(process.env.SERVER_PORT ?? 8787);
+const corsOrigin = process.env.CORS_ORIGIN ?? "*";
 const endpointUrl = process.env.NEBIUS_ENDPOINT_URL ?? "";
 const endpointPath = process.env.NEBIUS_ENDPOINT_PATH ?? "/v1/robotics/plan";
+const healthPath = process.env.NEBIUS_HEALTH_PATH ?? "/health";
 const endpointToken = process.env.NEBIUS_ENDPOINT_TOKEN ?? "";
 const modelImage = process.env.NEBIUS_MODEL_IMAGE ?? "registry.example.com/robotics/cosmos-reason:demo";
 const gpuClass = process.env.NEBIUS_GPU_CLASS ?? "GPU-backed Serverless AI endpoint";
 const shmSize = process.env.NEBIUS_SHM_SIZE ?? "16Gi";
 const allowFallback = (process.env.ALLOW_FALLBACK_ON_ERROR ?? "true") !== "false";
 const coldStartThresholdMs = Number(process.env.COLD_START_THRESHOLD_MS ?? 2500);
+const liveCheckTimeoutMs = Number(process.env.LIVE_CHECK_TIMEOUT_MS ?? 15000);
+const recordLiveResponses = (process.env.RECORD_LIVE_RESPONSES ?? "false") === "true";
+const replayRecordingsPath = path.resolve(rootDir, process.env.REPLAY_RECORDINGS_PATH ?? "server/replay-recordings.jsonl");
 
 const validModes = new Set(["live", "replay", "offline"]);
 let activeMode = validModes.has(process.env.DEMO_MODE) ? process.env.DEMO_MODE : "offline";
@@ -33,8 +42,17 @@ const stats = {
   startedAt: new Date().toISOString()
 };
 
-app.use(cors());
+app.disable("x-powered-by");
+if (corsOrigin === "*") {
+  app.use(cors());
+} else {
+  app.use(cors({ origin: corsOrigin.split(",").map((origin) => origin.trim()).filter(Boolean) }));
+}
 app.use(express.json({ limit: "12mb" }));
+app.use("/api", (_request, response, next) => {
+  response.setHeader("Cache-Control", "no-store");
+  next();
+});
 
 function nowMs() {
   return Number(process.hrtime.bigint() / 1000000n);
@@ -84,6 +102,44 @@ function extractJsonPayload(raw) {
   }
 }
 
+function configuredMissing() {
+  return [
+    ["NEBIUS_ENDPOINT_URL", endpointUrl],
+    ["NEBIUS_ENDPOINT_TOKEN", endpointToken]
+  ]
+    .filter(([, value]) => !value)
+    .map(([name]) => name);
+}
+
+function endpointUrlFor(pathValue) {
+  return new URL(pathValue, endpointUrl.endsWith("/") ? endpointUrl : `${endpointUrl}/`);
+}
+
+function endpointHeaders(extra = {}) {
+  return {
+    ...(endpointToken ? { Authorization: `Bearer ${endpointToken}` } : {}),
+    ...extra
+  };
+}
+
+function safeErrorMessage(error) {
+  const raw = error instanceof Error ? error.message : String(error);
+  return raw
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+    .replace(endpointToken, endpointToken ? "[redacted]" : "")
+    .slice(0, 320);
+}
+
+async function fetchWithTimeout(url, options, timeoutMs) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function normalizePlan(rawResponse, fallback, metadata = {}) {
   const raw = extractJsonPayload(rawResponse) ?? {};
   const source = raw.robotics_plan ?? raw.plan ?? raw;
@@ -124,13 +180,44 @@ function replayLatency(sceneId) {
   return 580 + index * 47;
 }
 
-function makeReplayResponse(scene, mode = activeMode, metadata = {}) {
+async function latestReplayPlan(sceneId) {
+  if (!existsSync(replayRecordingsPath)) return null;
+
+  const contents = await readFile(replayRecordingsPath, "utf8");
+  const lines = contents.split("\n").filter(Boolean).reverse();
+  for (const line of lines) {
+    try {
+      const record = JSON.parse(line);
+      if (record.sceneId === sceneId && record.plan) {
+        return record.plan;
+      }
+    } catch {
+      // Ignore malformed local rehearsal lines and keep scanning older records.
+    }
+  }
+
+  return null;
+}
+
+async function makeReplayResponse(scene, mode = activeMode, metadata = {}) {
+  if (mode === "replay") {
+    const recordedPlan = await latestReplayPlan(scene.id);
+    if (recordedPlan) {
+      return normalizePlan(recordedPlan, scene.expected, {
+        latencyMs: metadata.latencyMs ?? recordedPlan.latency_ms ?? replayLatency(scene.id),
+        mode,
+        serverlessStatus: metadata.serverlessStatus ?? "warm",
+        source: "recorded-live-replay"
+      });
+    }
+  }
+
   const latencyMs = metadata.latencyMs ?? (mode === "offline" ? 18 : replayLatency(scene.id));
   return normalizePlan(scene.expected, scene.expected, {
     latencyMs,
     mode,
     serverlessStatus: mode === "offline" ? "offline" : "warm",
-    source: mode === "offline" ? "bundled-offline" : "captured-replay"
+    source: mode === "offline" ? "bundled-offline" : "bundled-replay"
   });
 }
 
@@ -140,6 +227,7 @@ function statusPayload() {
     mode: activeMode,
     endpointConfigured: Boolean(endpointUrl && endpointToken),
     endpointPath,
+    healthPath,
     requestCount: stats.requestCount,
     errorCount: stats.errorCount,
     lastLatencyMs: stats.lastLatencyMs,
@@ -148,16 +236,18 @@ function statusPayload() {
     modelImage,
     gpuClass,
     shmSize,
+    replayRecordingEnabled: recordLiveResponses,
     startedAt: stats.startedAt
   };
 }
 
 async function callNebiusEndpoint(scene, prompt) {
-  if (!endpointUrl || !endpointToken) {
-    throw new Error("NEBIUS_ENDPOINT_URL and NEBIUS_ENDPOINT_TOKEN are required for live mode.");
+  const missing = configuredMissing();
+  if (missing.length > 0) {
+    throw new Error(`${missing.join(" and ")} required for live mode.`);
   }
 
-  const url = new URL(endpointPath, endpointUrl.endsWith("/") ? endpointUrl : `${endpointUrl}/`);
+  const url = endpointUrlFor(endpointPath);
   const payload = {
     scene_id: scene.id,
     prompt,
@@ -169,10 +259,7 @@ async function callNebiusEndpoint(scene, prompt) {
   const started = nowMs();
   const response = await fetch(url, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${endpointToken}`,
-      "Content-Type": "application/json"
-    },
+    headers: endpointHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload)
   });
   const latencyMs = nowMs() - started;
@@ -191,12 +278,19 @@ async function callNebiusEndpoint(scene, prompt) {
 
   const serverlessStatus = !observedLiveRequest || latencyMs >= coldStartThresholdMs ? "cold" : "warm";
   observedLiveRequest = true;
-  return normalizePlan(raw, scene.expected, {
+  const plan = normalizePlan(raw, scene.expected, {
     latencyMs,
     mode: "live",
     serverlessStatus,
     source: "nebius-serverless"
   });
+  if (recordLiveResponses) {
+    await appendFile(
+      replayRecordingsPath,
+      `${JSON.stringify({ recordedAt: new Date().toISOString(), sceneId: scene.id, prompt, plan })}\n`
+    );
+  }
+  return plan;
 }
 
 app.get("/api/health", (_request, response) => {
@@ -205,6 +299,47 @@ app.get("/api/health", (_request, response) => {
 
 app.get("/api/status", (_request, response) => {
   response.json(statusPayload());
+});
+
+app.post("/api/live-check", async (_request, response) => {
+  const missing = configuredMissing();
+  if (missing.length > 0) {
+    response.status(400).json({
+      ok: false,
+      configured: false,
+      missing,
+      status: statusPayload()
+    });
+    return;
+  }
+
+  const started = nowMs();
+  try {
+    const endpointResponse = await fetchWithTimeout(
+      endpointUrlFor(healthPath),
+      { method: "GET", headers: endpointHeaders() },
+      liveCheckTimeoutMs
+    );
+    const latencyMs = nowMs() - started;
+    const body = await endpointResponse.text();
+    response.status(endpointResponse.ok ? 200 : 502).json({
+      ok: endpointResponse.ok,
+      configured: true,
+      httpStatus: endpointResponse.status,
+      latencyMs,
+      healthPath,
+      bodyPreview: body.slice(0, 240),
+      status: statusPayload()
+    });
+  } catch (error) {
+    response.status(502).json({
+      ok: false,
+      configured: true,
+      error: safeErrorMessage(error),
+      healthPath,
+      status: statusPayload()
+    });
+  }
 });
 
 app.get("/api/scenes", (_request, response) => {
@@ -233,7 +368,7 @@ app.post("/api/infer", async (request, response) => {
     if (activeMode === "live") {
       plan = await callNebiusEndpoint(scene, prompt);
     } else {
-      plan = makeReplayResponse(scene, activeMode);
+      plan = await makeReplayResponse(scene, activeMode);
     }
 
     stats.lastLatencyMs = plan.latency_ms;
@@ -248,7 +383,7 @@ app.post("/api/infer", async (request, response) => {
   } catch (error) {
     stats.errorCount += 1;
     if (allowFallback) {
-      const plan = makeReplayResponse(scene, "replay", { latencyMs: replayLatency(scene.id) });
+      const plan = await makeReplayResponse(scene, "replay", { latencyMs: replayLatency(scene.id) });
       stats.lastLatencyMs = plan.latency_ms;
       stats.lastMode = "replay";
       stats.lastStatus = "live-fallback";
@@ -263,13 +398,13 @@ app.post("/api/infer", async (request, response) => {
             "Live endpoint was unavailable; replay fallback was used for stage continuity."
           ]
         },
-        warning: error instanceof Error ? error.message : String(error),
+        warning: safeErrorMessage(error),
         status: statusPayload()
       });
       return;
     }
 
-    response.status(502).json({ error: error instanceof Error ? error.message : String(error), status: statusPayload() });
+    response.status(502).json({ error: safeErrorMessage(error), status: statusPayload() });
   }
 });
 

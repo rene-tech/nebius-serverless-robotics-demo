@@ -10,10 +10,14 @@
     "dev": "concurrently \"npm:server\" \"npm:client\"",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0",
-    "start": "node server/index.js"
+    "start": "node server/index.js",
+    "smoke": "node scripts/smoke-test.js",
+    "test": "npm run build && npm run smoke",
+    "validate:live": "node scripts/validate-live-endpoint.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
     "express": "^5.1.0",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
