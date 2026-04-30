@@ -6,7 +6,8 @@ Standalone public demo for showing a Dockerized robotics model served through Ne
 
 - A browser UI for robotics visual instruction following.
 - A token-safe backend proxy that calls a Nebius Serverless AI endpoint.
-- A small deterministic demo model container under `model-server/` for live Serverless endpoint rehearsals when a real robotics model image is not available yet.
+- A live path for OpenAI-compatible VLM endpoints, including image upload and robotics JSON normalization.
+- A small deterministic demo model container under `model-server/` for rehearsals when a real robotics model image is not available.
 - Deterministic offline and replay modes for stage-safe demos.
 - Live mode for calling a real token-authenticated endpoint.
 - Bounding boxes, selected target, robot action plan, trajectory overlay, safety notes, confidence, latency, and cold/warm status.
@@ -17,7 +18,7 @@ Standalone public demo for showing a Dockerized robotics model served through Ne
 Standalone React UI
    -> Express backend proxy
    -> Nebius Serverless AI endpoint
-   -> Robotics model Docker container
+   -> VLM or robotics model Docker container
 ```
 
 The browser never receives the Nebius endpoint token. The backend normalizes model output into the robotics schema used by the UI.
@@ -50,11 +51,13 @@ Copy `.env.example` to `.env` and set the backend-only values:
 SERVER_PORT=8787
 DEMO_MODE=offline
 NEBIUS_ENDPOINT_URL=https://your-endpoint.example
-NEBIUS_ENDPOINT_PATH=/v1/robotics/plan
+NEBIUS_ENDPOINT_PATH=/v1/chat/completions
 NEBIUS_HEALTH_PATH=/health
 NEBIUS_ENDPOINT_TOKEN=...
-NEBIUS_MODEL_IMAGE=registry.example.com/robotics/cosmos-reason:demo
-NEBIUS_GPU_CLASS=GPU-backed Serverless AI endpoint
+NEBIUS_ENDPOINT_KIND=openai-vlm
+NEBIUS_VLM_MODEL=qwen2.5-vl-3b
+NEBIUS_MODEL_IMAGE=vllm/vllm-openai:latest
+NEBIUS_GPU_CLASS=gpu-l40s-d/1gpu-16vcpu-96gb
 NEBIUS_SHM_SIZE=16Gi
 ALLOW_FALLBACK_ON_ERROR=true
 RECORD_LIVE_RESPONSES=true
@@ -77,7 +80,7 @@ npm run validate:live
 - `POST /api/live-check`
 - `POST /api/infer` with `{ "sceneId": "...", "prompt": "..." }`
 
-The live endpoint receives:
+For a native robotics endpoint, the backend sends:
 
 ```json
 {
@@ -88,6 +91,8 @@ The live endpoint receives:
   "response_schema": "robotics_plan_v1"
 }
 ```
+
+For `NEBIUS_ENDPOINT_KIND=openai-vlm`, the backend sends an OpenAI-compatible `/v1/chat/completions` request with the scene rendered as a PNG data URL and asks the model to return only robotics JSON.
 
 The proxy returns normalized robotics JSON:
 
@@ -130,7 +135,7 @@ docker run --rm -p 8000:8000 nebius-robotics-demo-model
 ## Presenter Flow
 
 1. Open the demo page in `offline` or `replay` mode.
-2. Explain that the model is packaged as a Docker container behind a Nebius Serverless AI endpoint.
+2. Explain that the VLM is packaged as a Docker container behind a Nebius Serverless AI endpoint.
 3. Select the tabletop pick-and-place scene and run inference.
 4. Point out detected objects, the selected target, trajectory, safety notes, and latency.
 5. Switch to a safety-focused scene and show the stop or avoid behavior.

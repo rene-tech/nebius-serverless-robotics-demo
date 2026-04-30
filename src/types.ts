@@ -37,6 +37,7 @@ export type StatusPayload = {
   ok: boolean;
   mode: DemoMode;
   endpointConfigured: boolean;
+  endpointKind: string;
   endpointPath: string;
   healthPath: string;
   requestCount: number;

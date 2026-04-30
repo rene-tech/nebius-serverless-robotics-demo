@@ -1,6 +1,6 @@
 # Live Demo Runbook
 
-This app is already usable in `offline` and `replay` modes. A full live demo needs one running Nebius Serverless AI endpoint that accepts the backend request shape and returns model output that can be normalized into the robotics schema.
+This app is already usable in `offline` and `replay` modes. A full live demo needs one running Nebius Serverless AI endpoint that accepts either the native robotics request shape or an OpenAI-compatible VLM request and returns model output that can be normalized into the robotics schema.
 
 ## Required Values
 
@@ -9,11 +9,13 @@ Set these in `.env` on the backend host:
 ```bash
 DEMO_MODE=offline
 NEBIUS_ENDPOINT_URL=https://...
-NEBIUS_ENDPOINT_PATH=/v1/robotics/plan
+NEBIUS_ENDPOINT_PATH=/v1/chat/completions
 NEBIUS_HEALTH_PATH=/health
 NEBIUS_ENDPOINT_TOKEN=...
-NEBIUS_MODEL_IMAGE=cr.me-west1.nebius.cloud/<registry-id>/<image>:<tag>
-NEBIUS_GPU_CLASS=<platform>/<preset shown to audience>
+NEBIUS_ENDPOINT_KIND=openai-vlm
+NEBIUS_VLM_MODEL=qwen2.5-vl-3b
+NEBIUS_MODEL_IMAGE=vllm/vllm-openai:latest
+NEBIUS_GPU_CLASS=<gpu-platform>/<gpu-preset shown to audience>
 ALLOW_FALLBACK_ON_ERROR=true
 RECORD_LIVE_RESPONSES=true
 ```
@@ -22,7 +24,7 @@ Do not put `NEBIUS_ENDPOINT_TOKEN` in the browser environment or a static hostin
 
 ## Endpoint Contract
 
-The robotics container should expose:
+For a native robotics container, expose:
 
 ```text
 GET  /health
@@ -56,7 +58,16 @@ The ideal response is:
 
 The backend also accepts OpenAI-style responses where JSON is in `choices[0].message.content`.
 
-This repository includes a deterministic demo implementation in `model-server/`. It is not a real VLM, but it exercises the same Serverless endpoint lifecycle, auth, latency, fallback, and UI path while the final robotics model image is being selected.
+For a real VLM container, expose the OpenAI-compatible vLLM surface:
+
+```text
+GET  /health
+POST /v1/chat/completions
+```
+
+Set `NEBIUS_ENDPOINT_KIND=openai-vlm`. The backend renders the SVG scene to PNG, sends it as `image_url` content, and asks the model to return the same robotics JSON schema.
+
+This repository includes a deterministic demo implementation in `model-server/`. It is not a real VLM, but it exercises the same Serverless endpoint lifecycle, auth, latency, fallback, and UI path.
 
 ## Nebius CLI Shape
 
@@ -64,16 +75,18 @@ The installed CLI supports endpoint creation with this shape:
 
 ```bash
 nebius ai endpoint create \
-  --name nebius-serverless-robotics-demo \
-  --image cr.me-west1.nebius.cloud/<registry-id>/<image>:<tag> \
+  --name nebius-robotics-vlm-qwen \
+  --image vllm/vllm-openai:latest \
   --container-port 8000 \
   --auth token \
   --token '<event-token>' \
   --public \
-  --platform <gpu-platform> \
-  --preset <gpu-preset> \
+  --platform gpu-l40s-d \
+  --preset 1gpu-16vcpu-96gb \
   --shm-size 16Gi \
-  --env DEMO_RUNTIME=serverless-robotics
+  --env HF_HUB_ENABLE_HF_TRANSFER=1 \
+  --env VLLM_WORKER_MULTIPROC_METHOD=spawn \
+  --args 'Qwen/Qwen2.5-VL-3B-Instruct --served-model-name qwen2.5-vl-3b --host 0.0.0.0 --port 8000 --dtype half --max-model-len 8192 --limit-mm-per-prompt '\''{"image":1}'\'''
 ```
 
 Creating endpoints can incur cost. Confirm image, platform, preset, and token strategy before running the command.

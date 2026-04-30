@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { appendFile, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import sharp from "sharp";
 import { getScene, sceneSummary, scenes } from "./demo-data.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -20,6 +21,10 @@ const endpointUrl = process.env.NEBIUS_ENDPOINT_URL ?? "";
 const endpointPath = process.env.NEBIUS_ENDPOINT_PATH ?? "/v1/robotics/plan";
 const healthPath = process.env.NEBIUS_HEALTH_PATH ?? "/health";
 const endpointToken = process.env.NEBIUS_ENDPOINT_TOKEN ?? "";
+const endpointKind = process.env.NEBIUS_ENDPOINT_KIND ?? "robotics";
+const vlmModel = process.env.NEBIUS_VLM_MODEL ?? "qwen2.5-vl-3b";
+const vlmTemperature = Number(process.env.NEBIUS_VLM_TEMPERATURE ?? 0);
+const vlmMaxTokens = Number(process.env.NEBIUS_VLM_MAX_TOKENS ?? 900);
 const modelImage = process.env.NEBIUS_MODEL_IMAGE ?? "registry.example.com/robotics/cosmos-reason:demo";
 const gpuClass = process.env.NEBIUS_GPU_CLASS ?? "GPU-backed Serverless AI endpoint";
 const shmSize = process.env.NEBIUS_SHM_SIZE ?? "16Gi";
@@ -119,6 +124,52 @@ function endpointHeaders(extra = {}) {
   return {
     ...(endpointToken ? { Authorization: `Bearer ${endpointToken}` } : {}),
     ...extra
+  };
+}
+
+async function scenePngDataUrl(scene) {
+  const png = await sharp(Buffer.from(scene.imageSvg)).png().toBuffer();
+  return `data:image/png;base64,${png.toString("base64")}`;
+}
+
+function roboticsSchemaPrompt(scene, prompt) {
+  return [
+    "You are a visual-language robotics planning model.",
+    "Analyze the provided 640x420 robotics scene image and the user instruction.",
+    "Return only valid JSON. Do not include markdown fences or explanatory text.",
+    "Use pixel coordinates in the original 640x420 image for bounding boxes and trajectory points.",
+    "The JSON schema is:",
+    "{\"objects\":[{\"name\":\"string\",\"bbox\":[x1,y1,x2,y2],\"confidence\":0.0}],\"selected_object\":\"string\",\"action_steps\":[\"string\"],\"trajectory\":[{\"x\":0,\"y\":0}],\"safety_notes\":[\"string\"],\"confidence\":0.0}",
+    `Scene id: ${scene.id}`,
+    `Scene title: ${scene.title}`,
+    `User instruction: ${prompt}`
+  ].join("\n");
+}
+
+async function endpointPayload(scene, prompt) {
+  if (endpointKind === "openai-vlm") {
+    return {
+      model: vlmModel,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: roboticsSchemaPrompt(scene, prompt) },
+            { type: "image_url", image_url: { url: await scenePngDataUrl(scene) } }
+          ]
+        }
+      ],
+      temperature: vlmTemperature,
+      max_tokens: vlmMaxTokens
+    };
+  }
+
+  return {
+    scene_id: scene.id,
+    prompt,
+    image: `data:image/svg+xml;base64,${Buffer.from(scene.imageSvg).toString("base64")}`,
+    image_format: "svg",
+    response_schema: "robotics_plan_v1"
   };
 }
 
@@ -226,6 +277,7 @@ function statusPayload() {
     ok: true,
     mode: activeMode,
     endpointConfigured: Boolean(endpointUrl && endpointToken),
+    endpointKind,
     endpointPath,
     healthPath,
     requestCount: stats.requestCount,
@@ -248,13 +300,7 @@ async function callNebiusEndpoint(scene, prompt) {
   }
 
   const url = endpointUrlFor(endpointPath);
-  const payload = {
-    scene_id: scene.id,
-    prompt,
-    image: `data:image/svg+xml;base64,${Buffer.from(scene.imageSvg).toString("base64")}`,
-    image_format: "svg",
-    response_schema: "robotics_plan_v1"
-  };
+  const payload = await endpointPayload(scene, prompt);
 
   const started = nowMs();
   const response = await fetch(url, {

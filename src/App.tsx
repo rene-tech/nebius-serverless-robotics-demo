@@ -65,7 +65,7 @@ function SceneOverlay({ plan }: { plan?: RoboticsPlan }) {
     <svg className="scene-overlay" viewBox="0 0 640 420" aria-hidden="true">
       <defs>
         <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M 0 0 L 10 5 L 0 10 z" fill="#0f766e" />
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#052b42" />
         </marker>
       </defs>
 
@@ -298,13 +298,17 @@ export default function App() {
   const plan = result?.plan;
   const currentMode = status?.mode ?? "offline";
   const serverlessStatus = plan?.serverless_status ?? status?.lastStatus ?? currentMode;
+  const inferenceKind = status?.endpointKind === "openai-vlm" ? "OpenAI VLM" : "Robotics JSON";
 
   return (
     <main className="app-shell">
       <header className="topbar">
-        <div>
-          <p className="eyebrow">Nebius Serverless AI</p>
-          <h1>Serverless Robot Brain</h1>
+        <div className="brand-lockup">
+          <img src="/NEBIUS-color-logo.svg" alt="Nebius" />
+          <div>
+            <p className="eyebrow">Serverless AI demo</p>
+            <h1>Robotics VLM Control</h1>
+          </div>
         </div>
         <div className="topbar-actions">
           <div className="token-pill">
@@ -324,7 +328,7 @@ export default function App() {
         <Metric icon={Activity} label="Endpoint" value={serverlessStatus} tone={statusTone(serverlessStatus)} />
         <Metric icon={Gauge} label="Latency" value={plan ? `${plan.latency_ms} ms` : status?.lastLatencyMs ? `${status.lastLatencyMs} ms` : "ready"} />
         <Metric icon={Cpu} label="Resource" value={status?.gpuClass ?? "GPU-backed endpoint"} />
-        <Metric icon={Server} label="Container" value={status?.modelImage ?? "Docker image configured on backend"} />
+        <Metric icon={Server} label={inferenceKind} value={status?.modelImage ?? "Docker image configured on backend"} />
       </section>
 
       {liveCheck && (
