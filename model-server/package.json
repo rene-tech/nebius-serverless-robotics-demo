@@ -1,0 +1,10 @@
+{
+  "name": "nebius-robotics-demo-model",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Deterministic robotics planning model container for the Nebius Serverless Robotics Demo.",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

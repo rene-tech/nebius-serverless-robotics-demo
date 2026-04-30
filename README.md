@@ -6,6 +6,7 @@ Standalone public demo for showing a Dockerized robotics model served through Ne
 
 - A browser UI for robotics visual instruction following.
 - A token-safe backend proxy that calls a Nebius Serverless AI endpoint.
+- A small deterministic demo model container under `model-server/` for live Serverless endpoint rehearsals when a real robotics model image is not available yet.
 - Deterministic offline and replay modes for stage-safe demos.
 - Live mode for calling a real token-authenticated endpoint.
 - Bounding boxes, selected target, robot action plan, trajectory overlay, safety notes, confidence, latency, and cold/warm status.
@@ -117,6 +118,13 @@ After `npm run build`, the Express server serves the compiled UI from `dist/`.
 ```bash
 docker build -t nebius-serverless-robotics-demo .
 docker run --rm -p 8787:8787 --env-file .env nebius-serverless-robotics-demo
+```
+
+Build the demo model endpoint container:
+
+```bash
+docker build -f Dockerfile.model -t nebius-robotics-demo-model .
+docker run --rm -p 8000:8000 nebius-robotics-demo-model
 ```
 
 ## Presenter Flow

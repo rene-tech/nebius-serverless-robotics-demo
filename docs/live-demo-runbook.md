@@ -56,6 +56,8 @@ The ideal response is:
 
 The backend also accepts OpenAI-style responses where JSON is in `choices[0].message.content`.
 
+This repository includes a deterministic demo implementation in `model-server/`. It is not a real VLM, but it exercises the same Serverless endpoint lifecycle, auth, latency, fallback, and UI path while the final robotics model image is being selected.
+
 ## Nebius CLI Shape
 
 The installed CLI supports endpoint creation with this shape:

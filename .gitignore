@@ -6,6 +6,7 @@ vite.config.d.ts
 .env
 .env.local
 server/replay-recordings*.jsonl
+.deploy*/
 .DS_Store
 npm-debug.log*
 server/*.log
