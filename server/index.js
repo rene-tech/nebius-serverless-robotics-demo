@@ -229,8 +229,114 @@ function normalizePlan(rawResponse, fallback, metadata = {}) {
   };
 }
 
-function sceneGroundedPlan(fallback, metadata = {}) {
-  return normalizePlan(fallback, fallback, {
+function normalizeText(value) {
+  return String(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function boxCenter(object) {
+  const [x1, y1, x2, y2] = object.bbox;
+  return {
+    x: Math.round((x1 + x2) / 2),
+    y: Math.round((y1 + y2) / 2)
+  };
+}
+
+function promptObjectScore(object, promptText) {
+  const name = normalizeText(object.name);
+  if (!name || !promptText.includes(name)) return 0;
+
+  const namePattern = escapeRegex(name).replace(/\s+/g, "\\s+");
+  const actionPattern = new RegExp(`\\b(pick(?:\\s+up)?|grab|grasp|select|lift|move|sort)\\s+(?:the\\s+|a\\s+|an\\s+|requested\\s+)?${namePattern}\\b`);
+  const avoidPattern = new RegExp(`\\b(without|avoid|avoiding|not|never|dont|don t|no)\\b.{0,40}\\b${namePattern}\\b|\\b${namePattern}\\b.{0,30}\\b(touch|touching|collision|avoid)\\b`);
+  const contextPattern = new RegExp(`\\b(place|near|to|inside|into)\\b.{0,35}\\b${namePattern}\\b`);
+  const passiveSceneObject = /\b(target|area|plate|human|hand|workspace)\b/.test(name);
+
+  let score = 2;
+  if (actionPattern.test(promptText)) score += 8;
+  if (contextPattern.test(promptText)) score -= 1;
+  if (avoidPattern.test(promptText)) score -= 8;
+  if (passiveSceneObject && !actionPattern.test(promptText)) score -= 5;
+  return score;
+}
+
+function selectPromptObject(fallback, prompt) {
+  if (fallback.selected_object === "none") return null;
+
+  const promptText = normalizeText(prompt);
+  if (!promptText) return null;
+
+  const candidates = (fallback.objects ?? [])
+    .map((object, index) => ({ object, index, score: promptObjectScore(object, promptText) }))
+    .filter((candidate) => candidate.score > 0)
+    .sort((left, right) => right.score - left.score || left.index - right.index);
+
+  const selected = candidates[0]?.object;
+  if (!selected || selected.name === fallback.selected_object) return null;
+  return selected;
+}
+
+function buildPromptGroundedPlan(fallback, selectedObject, prompt) {
+  const promptText = normalizeText(prompt);
+  const targetArea = (fallback.objects ?? []).find((object) => normalizeText(object.name).includes("target area"));
+  const plate = (fallback.objects ?? []).find((object) => normalizeText(object.name).includes("plate"));
+  const selectedCenter = boxCenter(selectedObject);
+  const targetCenter = targetArea ? boxCenter(targetArea) : null;
+  const selectedTop = Math.max(32, selectedObject.bbox[1] - 58);
+  const liftY = Math.max(32, selectedObject.bbox[1] - 78);
+
+  const trajectory = [
+    { x: selectedCenter.x, y: selectedTop },
+    selectedCenter,
+    { x: selectedCenter.x, y: liftY }
+  ];
+  if (targetArea && (promptText.includes("target") || promptText.includes("place"))) {
+    trajectory.push({ x: targetCenter.x, y: Math.max(32, targetArea.bbox[1] - 58) }, targetCenter);
+  }
+
+  const actionSteps = [
+    `Move the gripper above the ${selectedObject.name}.`,
+    `Descend vertically to the ${selectedObject.name}.`,
+    "Close the gripper with a controlled grasp.",
+    `Lift the ${selectedObject.name} clear of nearby objects.`
+  ];
+  if (targetArea && (promptText.includes("target") || promptText.includes("place"))) {
+    actionSteps.push(
+      "Move toward the target area while maintaining vertical clearance.",
+      `Release the ${selectedObject.name} near the target area.`
+    );
+  }
+
+  const safetyNotes = [];
+  if (plate && (promptText.includes("plate") || fallback.safety_notes?.some((note) => normalizeText(note).includes("plate")))) {
+    safetyNotes.push("Keep the carried object above plate height until it clears the plate.");
+  }
+  if (targetArea) {
+    safetyNotes.push("Use a slow release inside the marked target area.");
+  }
+  safetyNotes.push("Validate the planned path before executing motion.");
+
+  return {
+    ...fallback,
+    selected_object: selectedObject.name,
+    action_steps: actionSteps,
+    trajectory,
+    safety_notes: safetyNotes,
+    confidence: Math.min(0.92, Math.max(0.7, selectedObject.confidence ?? fallback.confidence ?? 0.8))
+  };
+}
+
+function sceneGroundedPlan(fallback, prompt, metadata = {}) {
+  const selectedObject = selectPromptObject(fallback, prompt);
+  const grounded = selectedObject ? buildPromptGroundedPlan(fallback, selectedObject, prompt) : fallback;
+  return normalizePlan(grounded, fallback, {
     ...metadata,
     source: metadata.source ?? "nebius-serverless-grounded"
   });
@@ -343,7 +449,7 @@ async function callNebiusEndpoint(scene, prompt) {
   };
   const plan =
     endpointKind === "openai-vlm" && vlmPlanStrategy === "scene-grounded"
-      ? sceneGroundedPlan(scene.expected, {
+      ? sceneGroundedPlan(scene.expected, prompt, {
           ...metadata,
           source: "nebius-serverless-grounded"
         })
