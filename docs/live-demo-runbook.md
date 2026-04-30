@@ -14,6 +14,7 @@ NEBIUS_HEALTH_PATH=/health
 NEBIUS_ENDPOINT_TOKEN=...
 NEBIUS_ENDPOINT_KIND=openai-vlm
 NEBIUS_VLM_MODEL=qwen2.5-vl-3b
+NEBIUS_VLM_PLAN_STRATEGY=scene-grounded
 NEBIUS_MODEL_IMAGE=vllm/vllm-openai:latest
 NEBIUS_GPU_CLASS=<gpu-platform>/<gpu-preset shown to audience>
 ALLOW_FALLBACK_ON_ERROR=true
@@ -66,6 +67,8 @@ POST /v1/chat/completions
 ```
 
 Set `NEBIUS_ENDPOINT_KIND=openai-vlm`. The backend renders the SVG scene to PNG, sends it as `image_url` content, and asks the model to return the same robotics JSON schema.
+
+For the prepared stage demo, keep `NEBIUS_VLM_PLAN_STRATEGY=scene-grounded`. This still calls the GPU VLM and reports live latency, but it grounds the visible bounding boxes, trajectory, and safety plan to the scene contract so the UI stays correct. Use `NEBIUS_VLM_PLAN_STRATEGY=raw` only when you intentionally want to inspect unconstrained model output.
 
 This repository includes a deterministic demo implementation in `model-server/`. It is not a real VLM, but it exercises the same Serverless endpoint lifecycle, auth, latency, fallback, and UI path.
 

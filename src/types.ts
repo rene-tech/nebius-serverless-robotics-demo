@@ -48,6 +48,7 @@ export type StatusPayload = {
   modelImage: string;
   gpuClass: string;
   shmSize: string;
+  vlmPlanStrategy: string;
   replayRecordingEnabled: boolean;
   startedAt: string;
 };

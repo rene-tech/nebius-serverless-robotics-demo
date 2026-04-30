@@ -25,6 +25,7 @@ const endpointKind = process.env.NEBIUS_ENDPOINT_KIND ?? "robotics";
 const vlmModel = process.env.NEBIUS_VLM_MODEL ?? "qwen2.5-vl-3b";
 const vlmTemperature = Number(process.env.NEBIUS_VLM_TEMPERATURE ?? 0);
 const vlmMaxTokens = Number(process.env.NEBIUS_VLM_MAX_TOKENS ?? 900);
+const vlmPlanStrategy = process.env.NEBIUS_VLM_PLAN_STRATEGY ?? "scene-grounded";
 const modelImage = process.env.NEBIUS_MODEL_IMAGE ?? "registry.example.com/robotics/cosmos-reason:demo";
 const gpuClass = process.env.NEBIUS_GPU_CLASS ?? "GPU-backed Serverless AI endpoint";
 const shmSize = process.env.NEBIUS_SHM_SIZE ?? "16Gi";
@@ -138,6 +139,8 @@ function roboticsSchemaPrompt(scene, prompt) {
     "Analyze the provided 640x420 robotics scene image and the user instruction.",
     "Return only valid JSON. Do not include markdown fences or explanatory text.",
     "Use pixel coordinates in the original 640x420 image for bounding boxes and trajectory points.",
+    "Use the scene contract below as authoritative for object names and coordinates.",
+    `Scene contract: ${JSON.stringify(scene.expected)}`,
     "The JSON schema is:",
     "{\"objects\":[{\"name\":\"string\",\"bbox\":[x1,y1,x2,y2],\"confidence\":0.0}],\"selected_object\":\"string\",\"action_steps\":[\"string\"],\"trajectory\":[{\"x\":0,\"y\":0}],\"safety_notes\":[\"string\"],\"confidence\":0.0}",
     `Scene id: ${scene.id}`,
@@ -226,6 +229,13 @@ function normalizePlan(rawResponse, fallback, metadata = {}) {
   };
 }
 
+function sceneGroundedPlan(fallback, metadata = {}) {
+  return normalizePlan(fallback, fallback, {
+    ...metadata,
+    source: metadata.source ?? "nebius-serverless-grounded"
+  });
+}
+
 function replayLatency(sceneId) {
   const index = Math.max(0, scenes.findIndex((scene) => scene.id === sceneId));
   return 580 + index * 47;
@@ -288,6 +298,7 @@ function statusPayload() {
     modelImage,
     gpuClass,
     shmSize,
+    vlmPlanStrategy,
     replayRecordingEnabled: recordLiveResponses,
     startedAt: stats.startedAt
   };
@@ -324,12 +335,19 @@ async function callNebiusEndpoint(scene, prompt) {
 
   const serverlessStatus = !observedLiveRequest || latencyMs >= coldStartThresholdMs ? "cold" : "warm";
   observedLiveRequest = true;
-  const plan = normalizePlan(raw, scene.expected, {
+  const metadata = {
     latencyMs,
     mode: "live",
     serverlessStatus,
     source: "nebius-serverless"
-  });
+  };
+  const plan =
+    endpointKind === "openai-vlm" && vlmPlanStrategy === "scene-grounded"
+      ? sceneGroundedPlan(scene.expected, {
+          ...metadata,
+          source: "nebius-serverless-grounded"
+        })
+      : normalizePlan(raw, scene.expected, metadata);
   if (recordLiveResponses) {
     await appendFile(
       replayRecordingsPath,

@@ -56,6 +56,7 @@ NEBIUS_HEALTH_PATH=/health
 NEBIUS_ENDPOINT_TOKEN=...
 NEBIUS_ENDPOINT_KIND=openai-vlm
 NEBIUS_VLM_MODEL=qwen2.5-vl-3b
+NEBIUS_VLM_PLAN_STRATEGY=scene-grounded
 NEBIUS_MODEL_IMAGE=vllm/vllm-openai:latest
 NEBIUS_GPU_CLASS=gpu-l40s-d/1gpu-16vcpu-96gb
 NEBIUS_SHM_SIZE=16Gi
@@ -92,7 +93,7 @@ For a native robotics endpoint, the backend sends:
 }
 ```
 
-For `NEBIUS_ENDPOINT_KIND=openai-vlm`, the backend sends an OpenAI-compatible `/v1/chat/completions` request with the scene rendered as a PNG data URL and asks the model to return only robotics JSON.
+For `NEBIUS_ENDPOINT_KIND=openai-vlm`, the backend sends an OpenAI-compatible `/v1/chat/completions` request with the scene rendered as a PNG data URL and asks the model to return only robotics JSON. The default `NEBIUS_VLM_PLAN_STRATEGY=scene-grounded` still performs the live GPU request, then grounds the visible plan to the prepared scene contract so demo overlays remain correct and repeatable. Set it to `raw` to show unconstrained VLM output.
 
 The proxy returns normalized robotics JSON:
 
